@@ -1,5 +1,5 @@
-Version = "2025-11-24"
+Version = "2025-11-30"
 Authors = ['BlavkEntropy1']
 Name = "Anti-Leecher for Nicotine"
-Description = "Say goodbye to the Scummy Leechers... Now with Suspcious Detector"
+Description = "Say goodbye to the Scummy Leechers... Now with Suspcious Detector and unban's them if there not scummy anymore"
 Prefix = "MLD"
