@@ -1,5 +1,5 @@
-Version = "2025-11-30"
-Authors = ['BlavkEntropy1']
-Name = "Anti-Leecher for Nicotine"
-Description = "Say goodbye to the Scummy Leechers... Now with Suspcious Detector and unban's them if there not scummy anymore"
+Version = "2026-03-23"
+Authors = ['BlavkEntropy1', 'CompositeRegister']
+Name = "Anti-Leecher for Nicotine + ProveIt"
+Description = "Leech and suspicious-share handling, with ProveIT captcha added for optional human verification before uploads"
 Prefix = "MLD"

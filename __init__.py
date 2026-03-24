@@ -1,8 +1,10 @@
 # This software is provided "as-is", without any express or implied warranty.
 # You can use it, modify it, and distribute it freely for any purpose.
 
+import time
 
 from pynicotine.pluginsystem import BasePlugin
+
 
 class Plugin(BasePlugin):
 
@@ -24,12 +26,23 @@ class Plugin(BasePlugin):
             "ignore_leechers": True,
             "ban_block_ip": False,
             "enable_sus_detector": True,
-            "sus_pattern_500_25": False,
+            "sus_pattern_500_25": True,
             "sus_pattern_1000_50": True,
-            "sus_pattern_1500_75": False,
-            "sus_pattern_2000_100": False,
+            "sus_pattern_1500_75": True,
+            "sus_pattern_2000_100": True,
             "auto_unban": True,           # GUI toggle for auto unban/unignore
-            "detected_leechers": []
+            "detected_leechers": [],
+            "enable_proveit": True,
+            "proveit_first_message": (
+                'ProveIt: To prove you are a human downloading these files, please type "download" '
+                "in this chat to be added to my whitelist."
+            ),
+            "proveit_success_message": (
+                "ProveIt: You are verified. Please try your downloads again."
+            ),
+            "proveit_captcha_word": "download",
+            "proveit_cooldown_seconds": 300,
+            "proveit_verified_users": [],
         }
 
         self.metasettings = {
@@ -46,20 +59,73 @@ class Plugin(BasePlugin):
             "send_message_to_leechers": {"description": "Send PM to leechers", "type": "bool"},
             "ban_leechers": {"description": "Ban leechers", "type": "bool"},
             "ignore_leechers": {"description": "Ignore leechers", "type": "bool"},
-            "enable_sus_detector": {"description": "Detect suspicious sharing patterns", "type": "bool"},
-            "sus_pattern_500_25": {"description": "500 files / 25 folders", "type": "bool"},
-            "sus_pattern_1000_50": {"description": "1000 files / 50 folders", "type": "bool"},
-            "sus_pattern_1500_75": {"description": "1500 files / 75 folders", "type": "bool"},
-            "sus_pattern_2000_100": {"description": "2000 files / 100 folders", "type": "bool"},
+            "enable_sus_detector": {
+                "description": "Detect suspicious sharing patterns",
+                "type": "bool",
+                "default": True,
+            },
+            "sus_pattern_500_25": {
+                "description": "500 files / 25 folders",
+                "type": "bool",
+                "default": True,
+            },
+            "sus_pattern_1000_50": {
+                "description": "1000 files / 50 folders",
+                "type": "bool",
+                "default": True,
+            },
+            "sus_pattern_1500_75": {
+                "description": "1500 files / 75 folders",
+                "type": "bool",
+                "default": True,
+            },
+            "sus_pattern_2000_100": {
+                "description": "2000 files / 100 folders",
+                "type": "bool",
+                "default": True,
+            },
             "ban_block_ip": {"description": "Block leecher IP (if known)", "type": "bool"},
             "auto_unban": {
                 "description": "Automatically unban/unignore users when they start sharing enough",
                 "type": "bool",
                 "default": True
-            }
+            },
+            "enable_proveit": {
+                "description": "ProveIt: require a simple chat captcha before allowing uploads (buddies are exempt)",
+                "type": "bool",
+                "default": True,
+            },
+            "proveit_first_message": {
+                "description": (
+                    "ProveIt: private message sent when a non-verified user queues a download "
+                    "(subject to cooldown). Each line is sent as a separate message."
+                ),
+                "type": "textview",
+            },
+            "proveit_success_message": {
+                "description": (
+                    "ProveIt: private message sent after the user sends the captcha word. "
+                    "Each line is sent as a separate message."
+                ),
+                "type": "textview",
+            },
+            "proveit_captcha_word": {
+                "description": "ProveIt: word users must type in private chat to verify (case-insensitive)",
+                "type": "str",
+            },
+            "proveit_cooldown_seconds": {
+                "description": "ProveIt: minimum seconds between sending the first-download message to the same user",
+                "type": "int",
+                "minimum": 0,
+            },
+            "proveit_verified_users": {
+                "description": "ProveIt: users who completed the captcha (whitelist)",
+                "type": "list string",
+            },
         }
 
         self.probed_users = {}
+        self._proveit_last_prompt_time = {}
 
     def loaded_notification(self):
         # Enforce minimum requirements
@@ -84,6 +150,67 @@ class Plugin(BasePlugin):
             self.settings["sus_patterns"].append((500, 25))
 
         self.log("Suspicious patterns loaded: %s", self.settings["sus_patterns"])
+
+        try:
+            cd = int(self.settings.get("proveit_cooldown_seconds", 300))
+        except (TypeError, ValueError):
+            cd = 300
+        self.settings["proveit_cooldown_seconds"] = max(0, cd)
+
+        if not isinstance(self.settings.get("proveit_verified_users"), list):
+            self.settings["proveit_verified_users"] = []
+
+    def proveit_is_exempt(self, user):
+        """True if ProveIt should not block this user's uploads (disabled, buddy, or verified)."""
+        if not self.settings.get("enable_proveit"):
+            return True
+        if user in self.core.buddies.users:
+            return True
+        if user in self.settings.get("proveit_verified_users", []):
+            return True
+        return False
+
+    def proveit_send_lines(self, user, text):
+        """Send multi-line ProveIt PMs as separate messages (respects open_private_chat)."""
+        if not text:
+            return
+        show = self.settings.get("open_private_chat", False)
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                self.send_private(user, line, show_ui=show, switch_page=False)
+            except Exception as e:
+                self.log("ProveIt: failed to send PM to %s: %s", (user, e))
+
+    def proveit_maybe_send_first_prompt(self, user):
+        text = self.settings.get("proveit_first_message") or ""
+        if not str(text).strip():
+            return
+        try:
+            cooldown = max(0, int(self.settings.get("proveit_cooldown_seconds", 0)))
+        except (TypeError, ValueError):
+            cooldown = 0
+        now = time.monotonic()
+        last = self._proveit_last_prompt_time.get(user)
+        if last is not None and (now - last) < cooldown:
+            return
+        self._proveit_last_prompt_time[user] = now
+        self.proveit_send_lines(user, text)
+
+    def proveit_reject_upload(self, user, virtual_path):
+        uploads = self.core.uploads
+        transfer = uploads.transfers.get(user + virtual_path)
+        if transfer:
+            try:
+                uploads.clear_uploads(
+                    uploads=[transfer],
+                    denied_message="Verification required",
+                )
+            except Exception as e:
+                self.log("ProveIt: could not clear upload for %s: %s", (user, e))
+        self.proveit_maybe_send_first_prompt(user)
 
     def send_pm(self, user):
         if not self.settings.get("send_message_to_leechers") or not self.settings.get("message"):
@@ -235,6 +362,10 @@ class Plugin(BasePlugin):
         )
 
     def upload_queued_notification(self, user, virtual_path, real_path):
+        if self.settings.get("enable_proveit") and not self.proveit_is_exempt(user):
+            self.proveit_reject_upload(user, virtual_path)
+            return
+
         if user in self.probed_users:
             return
 
@@ -259,3 +390,24 @@ class Plugin(BasePlugin):
         if self.probed_users[user] != "pending_leecher":
             return
         self.probed_users[user] = "processed_leecher"
+
+    def incoming_private_chat_notification(self, user, line):
+        if not self.settings.get("enable_proveit"):
+            return
+        if user in self.core.buddies.users:
+            return
+        if user in self.settings.get("proveit_verified_users", []):
+            return
+
+        word = (self.settings.get("proveit_captcha_word") or "download").strip().lower()
+        if not word:
+            return
+
+        candidate = (line or "").strip().lower()
+        if candidate != word:
+            return
+
+        verified = self.settings.setdefault("proveit_verified_users", [])
+        verified.append(user)
+        self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
+        self.log("ProveIt: user %s verified via captcha.", user)
