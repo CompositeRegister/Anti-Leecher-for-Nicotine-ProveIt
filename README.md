@@ -27,7 +27,7 @@ ProveIt is a lightweight “captcha” layer for **uploads**. It is aimed at **b
 
 - **Non-buddies** who are not on your **ProveIt verified whitelist** get their queued upload **removed** when they try to download from you.
 - They receive a **private message** you can edit (eg: ask them to type a word such as `download` in PM to be whitelisted).
-- When they send that **exact word** (case-insensitive), they are **added to the whitelist** and get a **second editable message** (eg: tel; them to retry their downloads).
+- When they send that **exact word** (case-insensitive), they are **added to the whitelist** and get a **second editable message** (eg: tell them to retry their downloads).
 - **Buddies** are **not** asked to prove anything.
 - A **cooldown** (default: several minutes) limits how often the “first download” reminder is sent to the same user, so rapid retries do not spam their PM.
 
@@ -43,7 +43,7 @@ ProveIt is a lightweight “captcha” layer for **uploads**. It is aimed at **b
 Because this is **Soulseek, not Soul-take**.  
 If you're here just to download and not contribute, go use Spotify or rip YouTube.  
 
-ProveIt: Soulseekers on [r/Soulseek](https://www.reddit.com/r/Soulseek/) have been looking for  ways to curb **“leech-slop”**, which are low-effort, often automated accounts that leech without behaving like real participants (see [vibecoded slop accounts](https://www.reddit.com/r/Soulseek/comments/1s1yh55/vibecoded_slop_accounts/) and [vibe coded leech slop is rising](https://www.reddit.com/r/Soulseek/comments/1rzsds8/vibe_coded_leech_slop_is_rising_how_do_we_stop_it/)). This plugin (especially with ProveIt) is made to remedy this, while still allowing real users to use Soulseek.
+ProveIt: Soulseekers on [r/Soulseek](https://www.reddit.com/r/Soulseek/) have been looking for ways to curb **“leech-slop”**, which are low-effort, often automated accounts that leech without behaving like real participants (see [vibecoded slop accounts](https://www.reddit.com/r/Soulseek/comments/1s1yh55/vibecoded_slop_accounts/) and [vibe coded leech slop is rising](https://www.reddit.com/r/Soulseek/comments/1rzsds8/vibe_coded_leech_slop_is_rising_how_do_we_stop_it/)). This plugin (especially with ProveIt) is made to remedy this, while still allowing real users to use Soulseek.
 
 ---
 
@@ -67,7 +67,7 @@ ProveIt: Soulseekers on [r/Soulseek](https://www.reddit.com/r/Soulseek/) have be
 **A:** Understood. But this plugin prioritizes people who share. If not, the people who share get punished. 
 
 **Q: Do downloaders need to install this plugin?**  
-**A:** No. It only needs to run on your side (Nicotine) People downloading from you do not need the plugin for it to apply to your shares/ for them to respond to the captcha.
+**A:** No. It only needs to run on your side (Nicotine) People downloading from you do not need the plugin for it to apply to your shares / for them to respond to the captcha.
 
 **ProveIt: Q: What if these tools catch on?**  
 **A:** If lots of people run the same fixed captcha word, scripted clients could eventually automate answering it. A **randomized captcha** (different challenge per user or per session) would help. I’m looking into how to do that sensibly in Nicotine+ but don’t really have a solid dapproach yet. **Contributions are welcome**, if you have a clean way to do this, feel free to add it.
