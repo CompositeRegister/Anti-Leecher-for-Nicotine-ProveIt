@@ -46,6 +46,7 @@ class Plugin(BasePlugin):
             "proveit_cooldown_seconds": 300,
             "proveit_verified_users": [],
             "proveit_hide_incoming_unverified_messages": False,  # replaced by hide_plugin_messages
+        }
 
         self.metasettings = {
             "message": {
