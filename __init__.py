@@ -4,6 +4,7 @@
 import time
 
 from pynicotine.pluginsystem import BasePlugin
+from pynicotine.pluginsystem import returncode
 
 
 class Plugin(BasePlugin):
@@ -18,7 +19,8 @@ class Plugin(BasePlugin):
 
         self.settings = {
             "message": "Please consider not being a leecher. Thanks",
-            "open_private_chat": False,
+            "hide_plugin_messages": True, # replaces open_private_chat and proveit_hide_incoming_unverified_messages; now toggles both and hides captcha replies
+            "open_private_chat": False,  # replaced by hide_plugin_messages
             "num_files": 1010,
             "num_folders": 51,
             "send_message_to_leechers": False,
@@ -43,50 +45,54 @@ class Plugin(BasePlugin):
             "proveit_captcha_word": "download",
             "proveit_cooldown_seconds": 300,
             "proveit_verified_users": [],
-        }
+            "proveit_hide_incoming_unverified_messages": False,  # replaced by hide_plugin_messages
 
         self.metasettings = {
             "message": {
-                "description": ("Private chat message to send to leechers."),
+                "description": ("Anti-Leecher: private chat message to send to leechers."),
                 "type": "textview"
             },
-            "open_private_chat": {
-                "description": "Open chat tabs when sending private messages",
-                "type": "bool"
+            "hide_plugin_messages": {
+                "description": (
+                    "BOTH: Hide messages from plugin "
+                    "(this will hide messages sent from the plugin and captcha responses)"
+                ),
+                "type": "bool",
+                "default": True,
             },
-            "num_files": {"description": "Minimum shared files", "type": "int", "minimum": 0},
-            "num_folders": {"description": "Minimum shared folders", "type": "int", "minimum": 1},
-            "send_message_to_leechers": {"description": "Send PM to leechers", "type": "bool"},
-            "ban_leechers": {"description": "Ban leechers", "type": "bool"},
-            "ignore_leechers": {"description": "Ignore leechers", "type": "bool"},
+            "num_files": {"description": "Anti-Leecher: minimum shared files", "type": "int", "minimum": 0},
+            "num_folders": {"description": "Anti-Leecher: minimum shared folders", "type": "int", "minimum": 1},
+            "send_message_to_leechers": {"description": "Anti-Leecher: send PM to leechers", "type": "bool"},
+            "ban_leechers": {"description": "Anti-Leecher: ban leechers", "type": "bool"},
+            "ignore_leechers": {"description": "Anti-Leecher: ignore leechers", "type": "bool"},
             "enable_sus_detector": {
-                "description": "Detect suspicious sharing patterns",
+                "description": "Anti-Leecher: detect suspicious sharing patterns",
                 "type": "bool",
                 "default": True,
             },
             "sus_pattern_500_25": {
-                "description": "500 files / 25 folders",
+                "description": "Anti-Leecher: suspicious pattern 500 files / 25 folders",
                 "type": "bool",
                 "default": True,
             },
             "sus_pattern_1000_50": {
-                "description": "1000 files / 50 folders",
+                "description": "Anti-Leecher: suspicious pattern 1000 files / 50 folders",
                 "type": "bool",
                 "default": True,
             },
             "sus_pattern_1500_75": {
-                "description": "1500 files / 75 folders",
+                "description": "Anti-Leecher: suspicious pattern 1500 files / 75 folders",
                 "type": "bool",
                 "default": True,
             },
             "sus_pattern_2000_100": {
-                "description": "2000 files / 100 folders",
+                "description": "Anti-Leecher: suspicious pattern 2000 files / 100 folders",
                 "type": "bool",
                 "default": True,
             },
-            "ban_block_ip": {"description": "Block leecher IP (if known)", "type": "bool"},
+            "ban_block_ip": {"description": "Anti-Leecher: block leecher IP (if known)", "type": "bool"},
             "auto_unban": {
-                "description": "Automatically unban/unignore users when they start sharing enough",
+                "description": "Anti-Leecher: automatically unban/unignore users when they share enough",
                 "type": "bool",
                 "default": True
             },
@@ -120,6 +126,10 @@ class Plugin(BasePlugin):
             },
             "proveit_verified_users": {
                 "description": "ProveIt: users who completed the captcha (whitelist)",
+                "type": "list string",
+            },
+            "detected_leechers": {
+                "description": "Anti-Leecher: detected leechers",
                 "type": "list string",
             },
         }
@@ -160,6 +170,13 @@ class Plugin(BasePlugin):
         if not isinstance(self.settings.get("proveit_verified_users"), list):
             self.settings["proveit_verified_users"] = []
 
+        # migrate old message visibility setting to hide_plugin_messages
+        plugin_config = self.config.sections["plugins"].get(self.internal_name.lower(), {})
+        if "hide_plugin_messages" not in plugin_config:
+            legacy_open_chat = bool(self.settings.get("open_private_chat", False))
+            legacy_hide_captcha = bool(self.settings.get("proveit_hide_incoming_unverified_messages", False))
+            self.settings["hide_plugin_messages"] = (not legacy_open_chat) or legacy_hide_captcha
+
     def proveit_is_exempt(self, user):
         """True if ProveIt should not block this user's uploads (disabled, buddy, or verified)."""
         if not self.settings.get("enable_proveit"):
@@ -170,11 +187,11 @@ class Plugin(BasePlugin):
             return True
         return False
 
-    def proveit_send_lines(self, user, text):
-        """Send multi-line ProveIt PMs as separate messages (respects open_private_chat)."""
+    def _send_private_lines(self, user, text):
+        """Send multi-line PMs and honor the hide_plugin_messages toggle."""
         if not text:
             return
-        show = self.settings.get("open_private_chat", False)
+        show = not self.settings.get("hide_plugin_messages", False)
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -182,9 +199,23 @@ class Plugin(BasePlugin):
             try:
                 self.send_private(user, line, show_ui=show, switch_page=False)
             except Exception as e:
-                self.log("ProveIt: failed to send PM to %s: %s", (user, e))
+                self.log("Failed to send PM to %s: %s", (user, e))
+
+    def proveit_send_lines(self, user, text):
+        """Send multi-line ProveIt PMs as separate messages."""
+        self._send_private_lines(user, text)
+
+    def is_user_banned(self, user):
+        """True if user is currently banned by Nicotine+ network filter."""
+        try:
+            return self.core.network_filter.is_user_banned(user)
+        except Exception:
+            return False
 
     def proveit_maybe_send_first_prompt(self, user):
+        if self.is_user_banned(user):
+            return
+
         text = self.settings.get("proveit_first_message") or ""
         if not str(text).strip():
             return
@@ -216,19 +247,14 @@ class Plugin(BasePlugin):
         if not self.settings.get("send_message_to_leechers") or not self.settings.get("message"):
             return
 
+        rendered_lines = []
         for line in self.settings["message"].splitlines():
+            rendered = line
             for placeholder, option_key in self.PLACEHOLDERS.items():
-                line = line.replace(placeholder, str(self.settings.get(option_key, 0)))
+                rendered = rendered.replace(placeholder, str(self.settings.get(option_key, 0)))
+            rendered_lines.append(rendered)
 
-            try:
-                self.send_private(
-                    user,
-                    line,
-                    show_ui=self.settings.get("open_private_chat", False),
-                    switch_page=False
-                )
-            except Exception as e:
-                self.log("Failed to send PM to %s: %s", (user, e))
+        self._send_private_lines(user, "\n".join(rendered_lines))
 
     def block_ip(self, user):
         stats = getattr(self.core.users, "watched", {}).get(user)
@@ -391,23 +417,29 @@ class Plugin(BasePlugin):
             return
         self.probed_users[user] = "processed_leecher"
 
-    def incoming_private_chat_notification(self, user, line):
+    def incoming_private_chat_event(self, user, line):
         if not self.settings.get("enable_proveit"):
-            return
+            return None
         if user in self.core.buddies.users:
-            return
+            return None
+        if self.is_user_banned(user):
+            return None
         if user in self.settings.get("proveit_verified_users", []):
-            return
+            return None
 
         word = (self.settings.get("proveit_captcha_word") or "download").strip().lower()
         if not word:
-            return
+            return None
 
         candidate = (line or "").strip().lower()
-        if candidate != word:
-            return
+        hide_incoming = self.settings.get("hide_plugin_messages", False)
 
-        verified = self.settings.setdefault("proveit_verified_users", [])
-        verified.append(user)
-        self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
-        self.log("ProveIt: user %s verified via captcha.", user)
+        if candidate == word:
+            verified = self.settings.setdefault("proveit_verified_users", [])
+            verified.append(user)
+            self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
+            self.log("ProveIt: user %s verified via captcha.", user)
+            if hide_incoming:
+                return returncode["zap"]
+
+        return None

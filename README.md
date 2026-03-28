@@ -35,6 +35,7 @@ ProveIt is a lightweight “captcha” layer for **uploads**. It is aimed at **b
 
 - Turn ProveIt on or off.
 - Edit the **first PM** and **success PM**, the **captcha word**, **cooldown seconds**, and view or manage the **verified users** list.
+- **Hide messages from plugin** (hides PM tabs/messages triggered by the plugin and hides exact captcha replies, while still allowing normal chat messages).
 
 ---
 
@@ -73,7 +74,7 @@ ProveIt: Soulseekers on [r/Soulseek](https://www.reddit.com/r/Soulseek/) have be
 **A:** If lots of people run the same fixed captcha word, scripted clients could eventually automate answering it. A **randomized captcha** (different challenge per user or per session) would help. I’m looking into how to do that sensibly in Nicotine+ but don’t really have a solid dapproach yet. **Contributions are welcome**, if you have a clean way to do this, feel free to add it.
 
 **ProveIt: Q: Can I hide or mute messages from this plugin?**  
-**A:** Not yet. If you know how to **hide or mute** plugin-related messages in Nicotine+ (chat, logs, or UI) without breaking behavior, or you want to help design that, **feel free to contribute** I have no idea how to implement that.
+**A:** Yes. **Hide messages from plugin** is now enabled by default, it hides plugin-triggered messages  while keeping normal chat messages visible.
 
 ---
 
