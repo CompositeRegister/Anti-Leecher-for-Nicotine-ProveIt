@@ -27,7 +27,9 @@ ProveIt is a lightweight “captcha” layer for **uploads**. It is aimed at **b
 
 - **Non-buddies** who are not on your **ProveIt verified whitelist** get their queued upload **removed** when they try to download from you.
 - They receive a **private message** you can edit (eg: ask them to type a word such as `download` in PM to be whitelisted).
-- When they send that **exact word** (case-insensitive), they are **added to the whitelist** and get a **second editable message** (eg: tell them to retry their downloads).
+- When they send that **exact word** (case-insensitive), they are **added to the whitelist** and get a **second editable message**.
+- By default, ProveIt will try to **auto-retry previously denied queued uploads** right after successful verification.
+- If auto-retry does not restart every download (client/network timing can vary), users should still **retry manually**.
 - **Buddies** are **not** asked to prove anything.
 - A **cooldown** (default: several minutes) limits how often the “first download” reminder is sent to the same user, so rapid retries do not spam their PM.
 
@@ -35,6 +37,7 @@ ProveIt is a lightweight “captcha” layer for **uploads**. It is aimed at **b
 
 - Turn ProveIt on or off.
 - Edit the **first PM** and **success PM**, the **captcha word**, **cooldown seconds**, and view or manage the **verified users** list.
+- Toggle **auto-retry uploads after verification** (enabled by default).
 - **Hide messages from plugin** (hides PM tabs/messages triggered by the plugin and hides exact captcha replies, while still allowing normal chat messages).
 
 ---

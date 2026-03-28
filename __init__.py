@@ -40,10 +40,12 @@ class Plugin(BasePlugin):
                 "in this chat to be added to my whitelist."
             ),
             "proveit_success_message": (
-                "ProveIt: You are verified. Please try your downloads again."
+                "ProveIt: You are verified. I will now retry your queued downloads automatically. "
+                "If they do not auto-restart, please retry manually."
             ),
             "proveit_captcha_word": "download",
             "proveit_cooldown_seconds": 300,
+            "proveit_auto_retry_uploads": True,
             "proveit_verified_users": [],
             "proveit_hide_incoming_unverified_messages": False,  # replaced by hide_plugin_messages
         }
@@ -125,6 +127,14 @@ class Plugin(BasePlugin):
                 "type": "int",
                 "minimum": 0,
             },
+            "proveit_auto_retry_uploads": {
+                "description": (
+                    "ProveIt: automatically re-queue denied uploads after captcha verification. "
+                    "If disabled, users must retry manually."
+                ),
+                "type": "bool",
+                "default": True,
+            },
             "proveit_verified_users": {
                 "description": "ProveIt: users who completed the captcha (whitelist)",
                 "type": "list string",
@@ -137,6 +147,7 @@ class Plugin(BasePlugin):
 
         self.probed_users = {}
         self._proveit_last_prompt_time = {}
+        self._proveit_pending_uploads = {}
 
     def loaded_notification(self):
         # Enforce minimum requirements
@@ -232,6 +243,10 @@ class Plugin(BasePlugin):
         self.proveit_send_lines(user, text)
 
     def proveit_reject_upload(self, user, virtual_path):
+        pending = self._proveit_pending_uploads.setdefault(user, [])
+        if virtual_path not in pending:
+            pending.append(virtual_path)
+
         uploads = self.core.uploads
         transfer = uploads.transfers.get(user + virtual_path)
         if transfer:
@@ -243,6 +258,21 @@ class Plugin(BasePlugin):
             except Exception as e:
                 self.log("ProveIt: could not clear upload for %s: %s", (user, e))
         self.proveit_maybe_send_first_prompt(user)
+
+    def proveit_retry_pending_uploads(self, user):
+        pending = self._proveit_pending_uploads.pop(user, [])
+        if not pending:
+            return
+
+        retried = 0
+        for virtual_path in pending:
+            try:
+                self.core.uploads.enqueue_upload(user, virtual_path)
+                retried += 1
+            except Exception as e:
+                self.log("ProveIt: failed to retry upload for %s (%s): %s", (user, virtual_path, e))
+
+        self.log("ProveIt: retried %d pending uploads for %s.", (retried, user))
 
     def send_pm(self, user):
         if not self.settings.get("send_message_to_leechers") or not self.settings.get("message"):
@@ -437,7 +467,12 @@ class Plugin(BasePlugin):
 
         if candidate == word:
             verified = self.settings.setdefault("proveit_verified_users", [])
-            verified.append(user)
+            if user not in verified:
+                verified.append(user)
+            if self.settings.get("proveit_auto_retry_uploads", True):
+                self.proveit_retry_pending_uploads(user)
+            else:
+                self._proveit_pending_uploads.pop(user, None)
             self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
             self.log("ProveIt: user %s verified via captcha.", user)
             if hide_incoming:
