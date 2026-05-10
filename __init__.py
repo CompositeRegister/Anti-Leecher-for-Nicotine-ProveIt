@@ -2,6 +2,7 @@
 # You can use it, modify it, and distribute it freely for any purpose.
 
 import time
+import unicodedata
 
 from pynicotine.pluginsystem import BasePlugin
 from pynicotine.pluginsystem import returncode
@@ -19,8 +20,8 @@ class Plugin(BasePlugin):
 
         self.settings = {
             "message": "Please consider not being a leecher. Thanks",
-            "hide_plugin_messages": True, # replaces open_private_chat and proveit_hide_incoming_unverified_messages; now toggles both and hides captcha replies
-            "open_private_chat": False,  # replaced by hide_plugin_messages
+            "hide_plugin_messages": False,
+            "open_private_chat": False,
             "num_files": 1010,
             "num_folders": 51,
             "send_message_to_leechers": False,
@@ -32,7 +33,7 @@ class Plugin(BasePlugin):
             "sus_pattern_1000_50": True,
             "sus_pattern_1500_75": True,
             "sus_pattern_2000_100": True,
-            "auto_unban": True,           # GUI toggle for auto unban/unignore
+            "auto_unban": True,
             "detected_leechers": [],
             "enable_proveit": True,
             "proveit_first_message": (
@@ -47,7 +48,13 @@ class Plugin(BasePlugin):
             "proveit_cooldown_seconds": 300,
             "proveit_auto_retry_uploads": True,
             "proveit_verified_users": [],
-            "proveit_hide_incoming_unverified_messages": False,  # replaced by hide_plugin_messages
+            "proveit_hide_incoming_unverified_messages": False,
+            "proveit_require_minimum_shares": True,
+            "proveit_fail_message": (
+                "ProveIt: Your share counts do not meet this host's minimum files/folders requirement. "
+                "You cannot be whitelisted until you share enough."
+            ),
+            "proveit_verifying_shares_message": "",
         }
 
         self.metasettings = {
@@ -57,11 +64,11 @@ class Plugin(BasePlugin):
             },
             "hide_plugin_messages": {
                 "description": (
-                    "BOTH: Hide messages from plugin "
-                    "(this will hide messages sent from the plugin and captcha responses)"
+                    "ProveIt / Anti-Leecher: hide plugin-triggered PM tabs and zap incoming captcha replies "
+                    "(disable this if private chats seem missing or empty)."
                 ),
                 "type": "bool",
-                "default": True,
+                "default": False,
             },
             "num_files": {"description": "Anti-Leecher: minimum shared files", "type": "int", "minimum": 0},
             "num_folders": {"description": "Anti-Leecher: minimum shared folders", "type": "int", "minimum": 1},
@@ -135,6 +142,29 @@ class Plugin(BasePlugin):
                 "type": "bool",
                 "default": True,
             },
+            "proveit_require_minimum_shares": {
+                "description": (
+                    "ProveIt: require Anti-Leecher minimum files/folders before whitelisting after captcha "
+                    "(recommended). When enabled, users below your minimum are banned like other leechers "
+                    "instead of being added to the whitelist."
+                ),
+                "type": "bool",
+                "default": True,
+            },
+            "proveit_fail_message": {
+                "description": (
+                    "ProveIt: PM sent when captcha is correct but share counts are below your minimum "
+                    "(when proveit_require_minimum_shares is enabled)."
+                ),
+                "type": "textview",
+            },
+            "proveit_verifying_shares_message": {
+                "description": (
+                    "ProveIt: optional PM while waiting for Soulseek share stats after captcha "
+                    "(leave empty to skip)."
+                ),
+                "type": "textview",
+            },
             "proveit_verified_users": {
                 "description": "ProveIt: users who completed the captcha (whitelist)",
                 "type": "list string",
@@ -148,6 +178,7 @@ class Plugin(BasePlugin):
         self.probed_users = {}
         self._proveit_last_prompt_time = {}
         self._proveit_pending_uploads = {}
+        self._proveit_pending_share_verify = set()
 
     def loaded_notification(self):
         # Enforce minimum requirements
@@ -321,6 +352,141 @@ class Plugin(BasePlugin):
             self.core.network_filter.unignore_user(user)
             self.log("User '%s' was ignored but now meets requirements. Unignored.", user)
 
+    def _normalize_captcha_text(self, text):
+        if text is None:
+            return ""
+        s = unicodedata.normalize("NFC", str(text)).strip().lower()
+        return " ".join(s.split())
+
+    def _configured_captcha_word(self):
+        raw = self.settings.get("proveit_captcha_word")
+        if isinstance(raw, (list, tuple)):
+            raw = raw[0] if raw else ""
+        raw = raw if raw is not None else "download"
+        return self._normalize_captcha_text(str(raw))
+
+    def _meets_minimum_shares(self, num_files, num_folders):
+        nf = num_files or 0
+        nd = num_folders or 0
+        return (
+            nf >= self.settings["num_files"]
+            and nd >= self.settings["num_folders"]
+        )
+
+    def _watched_share_counts(self, user):
+        stats = self.core.users.watched.get(user)
+        if not stats:
+            return None, None
+        nf = getattr(stats, "files", None)
+        nd = getattr(stats, "folders", None)
+        if nd is None:
+            nd = getattr(stats, "dirs", None)
+        try:
+            nf = int(nf) if nf is not None else 0
+        except (TypeError, ValueError):
+            nf = 0
+        try:
+            nd = int(nd) if nd is not None else 0
+        except (TypeError, ValueError):
+            nd = 0
+        return nf, nd
+
+    def _proveit_apply_leech_actions(self, user, num_files, num_folders):
+        """Ban / ignore / IP / PM using the same toggles as Anti-Leecher."""
+        actions = []
+        if self.settings["ban_leechers"]:
+            self.core.network_filter.ban_user(user)
+            actions.append("banned")
+        if self.settings["ignore_leechers"]:
+            self.core.network_filter.ignore_user(user)
+            actions.append("ignored")
+        if self.settings["ban_block_ip"]:
+            self.block_ip(user)
+            actions.append("IP blocked")
+        if self.settings["send_message_to_leechers"]:
+            self.send_pm(user)
+            actions.append("messaged")
+
+        if user not in self.settings["detected_leechers"]:
+            self.settings["detected_leechers"].append(user)
+
+        self.log(
+            "ProveIt: rejected whitelist for %s — %d files / %d folders (below minimum). %s.",
+            (user, num_files, num_folders, ", ".join(actions))
+        )
+
+    def _proveit_grant_verification(self, user, hide_incoming):
+        verified = self.settings.setdefault("proveit_verified_users", [])
+        if user not in verified:
+            verified.append(user)
+        if self.settings.get("proveit_auto_retry_uploads", True):
+            self.proveit_retry_pending_uploads(user)
+        else:
+            self._proveit_pending_uploads.pop(user, None)
+        self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
+        self.log("ProveIt: user %s verified via captcha.", user)
+        if hide_incoming:
+            return returncode["zap"]
+        return None
+
+    def _proveit_attempt_share_gate(self, user, hide_incoming):
+        """
+        After correct captcha: enforce minimum shares before whitelisting when enabled.
+        Returns returncode dict or None for caller to return from incoming_private_chat_event.
+        """
+        if not self.settings.get("proveit_require_minimum_shares", True):
+            return self._proveit_grant_verification(user, hide_incoming)
+
+        nf, nd = self._watched_share_counts(user)
+
+        if nf is None and nd is None:
+            self._proveit_pending_share_verify.add(user)
+            vm = (self.settings.get("proveit_verifying_shares_message") or "").strip()
+            if vm:
+                self.proveit_send_lines(user, vm)
+            try:
+                self.core.userbrowse.request_user_shares(user)
+            except Exception as e:
+                self.log("ProveIt: could not request shares for %s: %s", (user, e))
+            return None
+
+        if self._meets_minimum_shares(nf, nd):
+            return self._proveit_grant_verification(user, hide_incoming)
+
+        self._proveit_pending_uploads.pop(user, None)
+        self.proveit_send_lines(user, self.settings.get("proveit_fail_message", ""))
+        self._proveit_apply_leech_actions(user, nf or 0, nd or 0)
+        return None
+
+    def _proveit_resolve_pending_after_stats(self, user, num_files, num_folders):
+        if user not in self._proveit_pending_share_verify:
+            return
+
+        self._proveit_pending_share_verify.discard(user)
+        nf = num_files or 0
+        nd = num_folders or 0
+
+        if self.is_user_banned(user):
+            self._proveit_pending_uploads.pop(user, None)
+            self.log("ProveIt: cancelled pending verification for %s (user already banned).", user)
+            return
+
+        if self._meets_minimum_shares(nf, nd):
+            verified = self.settings.setdefault("proveit_verified_users", [])
+            if user not in verified:
+                verified.append(user)
+            if self.settings.get("proveit_auto_retry_uploads", True):
+                self.proveit_retry_pending_uploads(user)
+            else:
+                self._proveit_pending_uploads.pop(user, None)
+            self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
+            self.log("ProveIt: user %s verified after share stats arrived.", user)
+            return
+
+        self._proveit_pending_uploads.pop(user, None)
+        self.proveit_send_lines(user, self.settings.get("proveit_fail_message", ""))
+        self._proveit_apply_leech_actions(user, nf, nd)
+
     def check_user(self, user, num_files, num_folders):
         num_files = num_files or 0
         num_folders = num_folders or 0
@@ -419,26 +585,28 @@ class Plugin(BasePlugin):
         )
 
     def upload_queued_notification(self, user, virtual_path, real_path):
+        if user not in self.probed_users:
+            self.probed_users[user] = "requesting_stats"
+            stats = self.core.users.watched.get(user)
+            if stats:
+                self.check_user(user,
+                                num_files=getattr(stats, "files", 0),
+                                num_folders=getattr(stats, "folders", 0))
+
         if self.settings.get("enable_proveit") and not self.proveit_is_exempt(user):
             self.proveit_reject_upload(user, virtual_path)
             return
-
-        if user in self.probed_users:
-            return
-
-        self.probed_users[user] = "requesting_stats"
-        stats = self.core.users.watched.get(user)
-
-        if stats:
-            self.check_user(user,
-                            num_files=getattr(stats, "files", 0),
-                            num_folders=getattr(stats, "folders", 0))
 
     def user_stats_notification(self, user, stats):
         self.check_user(
             user,
             num_files=stats.get("files", 0),
             num_folders=stats.get("dirs", 0)
+        )
+        self._proveit_resolve_pending_after_stats(
+            user,
+            stats.get("files", 0),
+            stats.get("dirs", 0),
         )
 
     def upload_finished_notification(self, user, *_):
@@ -458,24 +626,15 @@ class Plugin(BasePlugin):
         if user in self.settings.get("proveit_verified_users", []):
             return None
 
-        word = (self.settings.get("proveit_captcha_word") or "download").strip().lower()
+        word = self._configured_captcha_word()
         if not word:
             return None
 
-        candidate = (line or "").strip().lower()
+        candidate = self._normalize_captcha_text(line)
+
         hide_incoming = self.settings.get("hide_plugin_messages", False)
 
-        if candidate == word:
-            verified = self.settings.setdefault("proveit_verified_users", [])
-            if user not in verified:
-                verified.append(user)
-            if self.settings.get("proveit_auto_retry_uploads", True):
-                self.proveit_retry_pending_uploads(user)
-            else:
-                self._proveit_pending_uploads.pop(user, None)
-            self.proveit_send_lines(user, self.settings.get("proveit_success_message", ""))
-            self.log("ProveIt: user %s verified via captcha.", user)
-            if hide_incoming:
-                return returncode["zap"]
+        if candidate != word:
+            return None
 
-        return None
+        return self._proveit_attempt_share_gate(user, hide_incoming)
