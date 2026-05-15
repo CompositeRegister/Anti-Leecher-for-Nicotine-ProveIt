@@ -634,7 +634,7 @@ class Plugin(BasePlugin):
 
         hide_incoming = self.settings.get("hide_plugin_messages", False)
 
-        if candidate != word:
+        if word not in candidate:
             return None
 
         return self._proveit_attempt_share_gate(user, hide_incoming)
